@@ -16,7 +16,7 @@ import sys
 import shutil
 try:
     import json
-except:
+except ImportError:
     import simplejson as json
 import filecmp
 from datetime import datetime, timedelta
@@ -216,8 +216,7 @@ class ExifTool(object):
         try:
             return json.loads(self.execute(*args))
         except ValueError:
-            sys.stdout.write('No files to parse or invalid data\n')
-            exit()
+            raise ValueError('No files to parse or invalid data')
 
 
 # ---------------------------------------
@@ -226,7 +225,7 @@ class ExifTool(object):
 
 def sortPhotos(src_dir, dest_dir, sort_format, rename_format, recursive=False,
         copy_files=False, test=False, remove_duplicates=True, day_begins=0,
-        additional_groups_to_ignore=['File'], additional_tags_to_ignore=[],
+        additional_groups_to_ignore=None, additional_tags_to_ignore=None,
         use_only_groups=None, use_only_tags=None, verbose=True, keep_filename=False):
     """
     This function is a convenience wrapper around ExifTool based on common usage scenarios for sortphotos.py
@@ -269,6 +268,11 @@ def sortPhotos(src_dir, dest_dir, sort_format, rename_format, recursive=False,
         True if you want to see details of file processing
 
     """
+
+    if additional_groups_to_ignore is None:
+        additional_groups_to_ignore = ['File']
+    if additional_tags_to_ignore is None:
+        additional_tags_to_ignore = []
 
     # some error checking
     if not os.path.exists(src_dir):
