@@ -20,7 +20,20 @@ import logging
 
 logger = logging.getLogger(__name__)
 
-exiftool_location = os.path.join(os.path.dirname(os.path.realpath(__file__)), 'Image-ExifTool', 'exiftool')
+def _find_exiftool():
+    """Find exiftool: prefer system install, fall back to bundled copy."""
+    # Check for system exiftool
+    for path in os.environ.get('PATH', '').split(os.pathsep):
+        candidate = os.path.join(path, 'exiftool')
+        if os.path.isfile(candidate) and os.access(candidate, os.X_OK):
+            return candidate, False  # (path, needs_perl)
+    # Fall back to bundled copy (requires perl)
+    bundled = os.path.join(os.path.dirname(os.path.realpath(__file__)), 'Image-ExifTool', 'exiftool')
+    if os.path.isfile(bundled):
+        return bundled, True
+    raise FileNotFoundError('exiftool not found. Install it (e.g., brew install exiftool) or ensure the bundled copy exists.')
+
+exiftool_location, exiftool_needs_perl = _find_exiftool()
 
 
 # -------- convenience methods -------------
@@ -175,13 +188,15 @@ class ExifTool(object):
 
     sentinel = "{ready}"
 
-    def __init__(self, executable=exiftool_location, verbose=False):
+    def __init__(self, executable=exiftool_location, needs_perl=exiftool_needs_perl, verbose=False):
         self.executable = executable
+        self.needs_perl = needs_perl
         self.verbose = verbose
 
     def __enter__(self):
+        cmd = ['perl', self.executable] if self.needs_perl else [self.executable]
         self.process = subprocess.Popen(
-            ['perl', self.executable, "-stay_open", "True",  "-@", "-"],
+            cmd + ["-stay_open", "True", "-@", "-"],
             stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
         return self
 
@@ -472,12 +487,12 @@ def main():
     parser.add_argument('--day-begins', type=int, default=0, help='hour of day that new day begins (0-23), \n\
     defaults to 0 which corresponds to midnight.  Useful for grouping pictures with previous day.')
     parser.add_argument('--ignore-groups', type=str, nargs='+',
-                    default=[],
+                    default=None,
                     help='a list of tag groups that will be ignored for date informations.\n\
     list of groups and tags here: http://www.sno.phy.queensu.ca/~phil/exiftool/TagNames/\n\
     by default the group \'File\' is ignored which contains file timestamp data')
     parser.add_argument('--ignore-tags', type=str, nargs='+',
-                    default=[],
+                    default=None,
                     help='a list of tags that will be ignored for date informations.\n\
     list of groups and tags here: http://www.sno.phy.queensu.ca/~phil/exiftool/TagNames/\n\
     the full tag name needs to be included (e.g., EXIF:CreateDate)')
