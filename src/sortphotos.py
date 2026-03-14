@@ -8,23 +8,17 @@ Copyright (c) S. Andrew Ning. All rights reserved.
 
 """
 
-from __future__ import print_function
-from __future__ import with_statement
 import subprocess
 import os
 import sys
 import shutil
-try:
-    import json
-except ImportError:
-    import simplejson as json
+import json
 import filecmp
 from datetime import datetime, timedelta
 import re
-import locale
+import logging
 
-# Setting locale to the 'local' value
-locale.setlocale(locale.LC_ALL, '')
+logger = logging.getLogger(__name__)
 
 exiftool_location = os.path.join(os.path.dirname(os.path.realpath(__file__)), 'Image-ExifTool', 'exiftool')
 
@@ -64,7 +58,7 @@ def parse_date_exif(date_string):
     second = 0
 
     if len(elements) > 1:
-        time_entries = re.split('(\+|-|Z)', elements[1])  # ['HH:MM:SS', '+', 'HH:MM']
+        time_entries = re.split(r'(\+|-|Z)', elements[1])  # ['HH:MM:SS', '+', 'HH:MM']
         time = time_entries[0].split(':')  # ['HH', 'MM', 'SS']
 
         if len(time) == 3:
@@ -128,7 +122,7 @@ def get_oldest_timestamp(data, additional_groups_to_ignore, additional_tags_to_i
 
 
     if print_all_tags:
-        print('All relevant tags:')
+        logger.debug('All relevant tags:')
 
     # run through all keys
     for key in data.keys():
@@ -139,7 +133,7 @@ def get_oldest_timestamp(data, additional_groups_to_ignore, additional_tags_to_i
             date = data[key]
 
             if print_all_tags:
-                print(str(key) + ', ' + str(date))
+                logger.debug('%s, %s', key, date)
 
             # (rare) check if multiple dates returned in a list, take the first one which is the oldest
             if isinstance(date, list):
@@ -161,9 +155,6 @@ def get_oldest_timestamp(data, additional_groups_to_ignore, additional_tags_to_i
     if not date_available:
         oldest_date = None
 
-    if print_all_tags:
-        print()
-
     return src_file, oldest_date, oldest_keys
 
 
@@ -172,7 +163,7 @@ def check_for_early_morning_photos(date, day_begins):
     """check for early hour photos to be grouped with previous day"""
 
     if date.hour < day_begins:
-        print('moving this photo to the previous day for classification purposes (day_begins=' + str(day_begins) + ')')
+        logger.info('moving this photo to the previous day for classification purposes (day_begins=%d)', day_begins)
         date = date - timedelta(hours=date.hour+1)  # push it to the day before for classificiation purposes
 
     return date
@@ -312,13 +303,12 @@ def sortPhotos(src_dir, dest_dir, sort_format, rename_format, recursive=False,
 
     # get all metadata
     with ExifTool(verbose=verbose) as e:
-        print('Preprocessing with ExifTool.  May take a while for a large number of files.')
-        sys.stdout.flush()
+        logger.info('Preprocessing with ExifTool.  May take a while for a large number of files.')
         metadata = e.get_metadata(*args)
 
     # setup output to screen
     num_files = len(metadata)
-    print()
+    logger.info('')
 
     if test:
         test_file_dict = {}
@@ -335,8 +325,8 @@ def sortPhotos(src_dir, dest_dir, sort_format, rename_format, recursive=False,
             ending = ']'
             if test:
                 ending = '] (TEST - no files are being moved/copied)'
-            print('[' + str(idx+1) + '/' + str(num_files) + ending)
-            print('Source: ' + src_file)
+            logger.info('[%d/%d%s', idx+1, num_files, ending)
+            logger.info('Source: %s', src_file)
         else:
             # progress bar
             numdots = int(20.0*(idx+1)/num_files)
@@ -347,20 +337,19 @@ def sortPhotos(src_dir, dest_dir, sort_format, rename_format, recursive=False,
         # check if no valid date found
         if not date:
             if verbose:
-                print('No valid dates were found using the specified tags.  File will remain where it is.')
-                print()
-                # sys.stdout.flush()
+                logger.info('No valid dates were found using the specified tags.  File will remain where it is.')
+                logger.info('')
             continue
 
         # ignore hidden files
         if os.path.basename(src_file).startswith('.'):
-            print('hidden file.  will be skipped')
-            print()
+            logger.info('hidden file.  will be skipped')
+            logger.info('')
             continue
 
         if verbose:
-            print('Date/Time: ' + str(date))
-            print('Corresponding Tags: ' + ', '.join(keys))
+            logger.info('Date/Time: %s', date)
+            logger.info('Corresponding Tags: %s', ', '.join(keys))
 
         # early morning photos can be grouped with previous day (depending on user setting)
         date = check_for_early_morning_photos(date, day_begins)
@@ -392,7 +381,7 @@ def sortPhotos(src_dir, dest_dir, sort_format, rename_format, recursive=False,
                 name += '(copy): '
             else:
                 name += '(move): '
-            print(name + dest_file)
+            logger.info('%s%s', name, dest_file)
 
 
         # check for collisions
@@ -409,7 +398,7 @@ def sortPhotos(src_dir, dest_dir, sort_format, rename_format, recursive=False,
                 if remove_duplicates and filecmp.cmp(src_file, dest_compare, shallow=False):  # check for identical files
                     fileIsIdentical = True
                     if verbose:
-                        print('Identical file already exists.  Duplicate will be ignored.\n')
+                        logger.info('Identical file already exists.  Duplicate will be ignored.\n')
                     break
 
                 else:  # name is same, but file is different
@@ -420,7 +409,7 @@ def sortPhotos(src_dir, dest_dir, sort_format, rename_format, recursive=False,
                         dest_file = root + '_' + str(append) + ext
                     append += 1
                     if verbose:
-                        print('Same name already exists...renaming to: ' + dest_file)
+                        logger.info('Same name already exists...renaming to: %s', dest_file)
 
             else:
                 break
@@ -443,16 +432,18 @@ def sortPhotos(src_dir, dest_dir, sort_format, rename_format, recursive=False,
 
 
         if verbose:
-            print()
-            # sys.stdout.flush()
+            logger.info('')
 
 
     if not verbose:
-        print()
+        sys.stdout.write('\n')
 
 
 def main():
     import argparse
+    import locale
+
+    locale.setlocale(locale.LC_ALL, '')
 
     # setup command line parsing
     parser = argparse.ArgumentParser(formatter_class=argparse.RawTextHelpFormatter,
@@ -501,6 +492,10 @@ def main():
 
     # parse command line arguments
     args = parser.parse_args()
+
+    # configure logging
+    log_level = logging.WARNING if args.silent else logging.INFO
+    logging.basicConfig(format='%(message)s', stream=sys.stdout, level=log_level)
 
     sortPhotos(args.src_dir, args.dest_dir, args.sort, args.rename, args.recursive,
         args.copy, args.test, not args.keep_duplicates, args.day_begins,
