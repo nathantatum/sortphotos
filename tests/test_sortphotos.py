@@ -320,20 +320,26 @@ class TestIntegrationSortPhotos(unittest.TestCase):
         self.assertFalse(os.path.isfile(os.path.join(self.src_dir, 'photo.jpg')))
 
     def test_default_ignores_file_group(self):
-        """With default settings, files with only File:* tags should be skipped."""
+        """With default settings, files with only File:* tags should go to unmatched."""
         self._create_test_file('photo.jpg', '2024:06:15 10:30:00')
         self.sortPhotos(self.src_dir, self.dest_dir, '%Y/%m-%b', None,
                         copy_files=True, verbose=False)  # default ignores File group
         dest_folder = os.path.join(self.dest_dir, '2024')
         self.assertFalse(os.path.exists(dest_folder), 'File should not be sorted when File group is ignored')
+        # File should be placed in unmatched folder
+        unmatched_file = os.path.join(self.dest_dir, 'unmatched', 'photo.jpg')
+        self.assertTrue(os.path.isfile(unmatched_file))
 
-    def test_hidden_files_skipped(self):
+    def test_hidden_files_to_unmatched(self):
         self._create_test_file('.hidden.jpg', '2024:06:15 10:30:00')
         self.sortPhotos(self.src_dir, self.dest_dir, '%Y/%m-%b', None,
                         copy_files=True, additional_groups_to_ignore=[], verbose=False)
-        # Hidden files should be skipped
+        # Hidden files should not be sorted into date folders
         dest_folder = os.path.join(self.dest_dir, '2024')
         self.assertFalse(os.path.exists(dest_folder))
+        # Hidden files should be placed in unmatched folder
+        unmatched_file = os.path.join(self.dest_dir, 'unmatched', '.hidden.jpg')
+        self.assertTrue(os.path.isfile(unmatched_file))
 
 
 if __name__ == '__main__':

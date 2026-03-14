@@ -345,45 +345,53 @@ def sortPhotos(src_dir, dest_dir, sort_format, rename_format, recursive=False,
             sys.stdout.write('[%-20s] %d of %d ' % ('='*numdots, idx+1, num_files))
             sys.stdout.flush()
 
-        # check if no valid date found
+        # check if file should go to unmatched folder
         if not date:
             if verbose:
-                logger.info('No valid dates were found using the specified tags.  File will remain where it is.')
+                logger.info('No valid dates were found using the specified tags.  File will be placed in unmatched folder.')
                 logger.info('')
-            continue
-
-        # ignore hidden files
-        if os.path.basename(src_file).startswith('.'):
-            logger.info('hidden file.  will be skipped')
-            logger.info('')
-            continue
-
-        if verbose:
-            logger.info('Date/Time: %s', date)
-            logger.info('Corresponding Tags: %s', ', '.join(keys))
-
-        # early morning photos can be grouped with previous day (depending on user setting)
-        date = check_for_early_morning_photos(date, day_begins)
-
-
-        # create folder structure
-        dir_structure = date.strftime(sort_format)
-        dirs = dir_structure.split('/')
-        dest_file = dest_dir
-        for thedir in dirs:
-            dest_file = os.path.join(dest_file, thedir)
+            dest_file = os.path.join(dest_dir, 'unmatched')
             if not test:
                 os.makedirs(dest_file, exist_ok=True)
+            filename = os.path.basename(src_file)
+            dest_file = os.path.join(dest_file, filename)
 
-        # rename file if necessary
-        filename = os.path.basename(src_file)
+        elif os.path.basename(src_file).startswith('.'):
+            if verbose:
+                logger.info('hidden file.  File will be placed in unmatched folder.')
+                logger.info('')
+            dest_file = os.path.join(dest_dir, 'unmatched')
+            if not test:
+                os.makedirs(dest_file, exist_ok=True)
+            filename = os.path.basename(src_file)
+            dest_file = os.path.join(dest_file, filename)
 
-        if rename_format is not None and date is not None:
-            _, ext = os.path.splitext(filename)
-            filename = date.strftime(rename_format) + ext.lower()
+        else:
+            if verbose:
+                logger.info('Date/Time: %s', date)
+                logger.info('Corresponding Tags: %s', ', '.join(keys))
 
-        # setup destination file
-        dest_file = os.path.join(dest_file, filename)
+            # early morning photos can be grouped with previous day (depending on user setting)
+            date = check_for_early_morning_photos(date, day_begins)
+
+            # create folder structure
+            dir_structure = date.strftime(sort_format)
+            dirs = dir_structure.split('/')
+            dest_file = dest_dir
+            for thedir in dirs:
+                dest_file = os.path.join(dest_file, thedir)
+                if not test:
+                    os.makedirs(dest_file, exist_ok=True)
+
+            # rename file if necessary
+            filename = os.path.basename(src_file)
+
+            if rename_format is not None and date is not None:
+                _, ext = os.path.splitext(filename)
+                filename = date.strftime(rename_format) + ext.lower()
+
+            # setup destination file
+            dest_file = os.path.join(dest_file, filename)
         root, ext = os.path.splitext(dest_file)
 
         if verbose:
