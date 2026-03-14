@@ -21,19 +21,17 @@ import logging
 logger = logging.getLogger(__name__)
 
 def _find_exiftool():
-    """Find exiftool: prefer system install, fall back to bundled copy."""
-    # Check for system exiftool
+    """Find exiftool on the system PATH."""
     for path in os.environ.get('PATH', '').split(os.pathsep):
         candidate = os.path.join(path, 'exiftool')
         if os.path.isfile(candidate) and os.access(candidate, os.X_OK):
-            return candidate, False  # (path, needs_perl)
-    # Fall back to bundled copy (requires perl)
-    bundled = os.path.join(os.path.dirname(os.path.realpath(__file__)), 'Image-ExifTool', 'exiftool')
-    if os.path.isfile(bundled):
-        return bundled, True
-    raise FileNotFoundError('exiftool not found. Install it (e.g., brew install exiftool) or ensure the bundled copy exists.')
+            return candidate
+    raise FileNotFoundError(
+        'exiftool not found on PATH. Install it via your package manager '
+        '(e.g., brew install exiftool, apt install libimage-exiftool-perl).'
+    )
 
-exiftool_location, exiftool_needs_perl = _find_exiftool()
+exiftool_location = _find_exiftool()
 
 
 # -------- convenience methods -------------
@@ -188,15 +186,13 @@ class ExifTool(object):
 
     sentinel = "{ready}"
 
-    def __init__(self, executable=exiftool_location, needs_perl=exiftool_needs_perl, verbose=False):
+    def __init__(self, executable=exiftool_location, verbose=False):
         self.executable = executable
-        self.needs_perl = needs_perl
         self.verbose = verbose
 
     def __enter__(self):
-        cmd = ['perl', self.executable] if self.needs_perl else [self.executable]
         self.process = subprocess.Popen(
-            cmd + ["-stay_open", "True", "-@", "-"],
+            [self.executable, "-stay_open", "True", "-@", "-"],
             stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
         return self
 
@@ -463,6 +459,7 @@ def main():
     # setup command line parsing
     parser = argparse.ArgumentParser(formatter_class=argparse.RawTextHelpFormatter,
                                      description='Sort files (primarily photos and videos) into folders by date\nusing EXIF and other metadata')
+    parser.add_argument('-v', '--version', action='version', version='%(prog)s 1.0')
     parser.add_argument('src_dir', type=str, help='source directory')
     parser.add_argument('dest_dir', type=str, help='destination directory')
     parser.add_argument('-r', '--recursive', action='store_true', help='search src_dir recursively')

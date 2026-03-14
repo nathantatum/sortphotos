@@ -12,5 +12,3 @@ requires-python = ">=3.7"
 [project.scripts]
 sortphotos = "src.sortphotos:main"
 
-[tool.setuptools.package-data]
-"src" = ["Image-ExifTool/**/*"]
