@@ -191,12 +191,13 @@ class ExifTool(object):
     def __enter__(self):
         self.process = subprocess.Popen(
             ['perl', self.executable, "-stay_open", "True",  "-@", "-"],
-            stdin=subprocess.PIPE, stdout=subprocess.PIPE)
+            stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
         return self
 
     def __exit__(self, exc_type, exc_value, traceback):
         self.process.stdin.write(b'-stay_open\nFalse\n')
         self.process.stdin.flush()
+        self.process.wait(timeout=30)
 
     def execute(self, *args):
         args = args + ("-execute\n",)
@@ -205,7 +206,11 @@ class ExifTool(object):
         output = ""
         fd = self.process.stdout.fileno()
         while not output.rstrip(' \t\n\r').endswith(self.sentinel):
+            if self.process.poll() is not None:
+                raise RuntimeError('ExifTool process terminated unexpectedly')
             increment = os.read(fd, 4096)
+            if not increment:
+                raise RuntimeError('ExifTool process returned no data')
             if self.verbose:
                 sys.stdout.write(increment.decode('utf-8'))
             output += increment.decode('utf-8')
@@ -277,6 +282,8 @@ def sortPhotos(src_dir, dest_dir, sort_format, rename_format, recursive=False,
     # some error checking
     if not os.path.exists(src_dir):
         raise Exception('Source directory does not exist')
+    if not os.path.exists(dest_dir):
+        raise Exception('Destination directory does not exist')
 
     # setup arguments to exiftool
     args = ['-j', '-a', '-G']
@@ -322,8 +329,6 @@ def sortPhotos(src_dir, dest_dir, sort_format, rename_format, recursive=False,
         # extract timestamp date for photo
         src_file, date, keys = get_oldest_timestamp(data, additional_groups_to_ignore, additional_tags_to_ignore)
 
-        # fixes further errors when using unicode characters like "\u20AC"
-        src_file.encode('utf-8')
 
         if verbose:
         # write out which photo we are at
@@ -367,8 +372,8 @@ def sortPhotos(src_dir, dest_dir, sort_format, rename_format, recursive=False,
         dest_file = dest_dir
         for thedir in dirs:
             dest_file = os.path.join(dest_file, thedir)
-            if not test and not os.path.exists(dest_file):
-                os.makedirs(dest_file)
+            if not test:
+                os.makedirs(dest_file, exist_ok=True)
 
         # rename file if necessary
         filename = os.path.basename(src_file)
