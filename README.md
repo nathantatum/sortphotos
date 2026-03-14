@@ -83,7 +83,7 @@ sortphotos.py uses Exiftool.py to search through all metadata that has date info
 
     python sortphotos.py source destination --ignore-groups File
 
-This would search through all other groups (EXIF, JPG, etc.) looking for relevant date tags and keep the oldest, but would not use File timestamps.  If there is no metadata (except file timestamp data) then the file will just stay where it is.  You could also specify specific tags to ignore
+This would search through all other groups (EXIF, JPG, etc.) looking for relevant date tags and keep the oldest, but would not use File timestamps.  If there is no metadata (except file timestamp data) then the file will be placed in an ``unmatched`` folder in the destination directory (see [unmatched files](#unmatched-files) below).  You could also specify specific tags to ignore
 
     python sortphotos.py source destination --ignore-tags File:FileModifyDate File:FileCreateDate
 
@@ -135,6 +135,9 @@ However, this option will copy even hidden files like .DS_Store. -->
 <!-- ## ignore EXIF
 If you don't want to use EXIF data at all (even if it exists) and just use time stamps you can add the ``--ignore-exif`` flag.
  -->
+
+## unmatched files
+Files that cannot be sorted — either because no valid date was found using the specified tags, or because they are hidden files (filenames starting with ``.``) — are automatically placed in an ``unmatched`` folder inside the destination directory.  This applies whether you are moving or copying files.  Collision handling works the same as for date-sorted files: if a file with the same name already exists in ``unmatched``, a number will be appended to avoid overwriting.
 
 ## change time of day when the day "begins"
 If you are taking photos for an event that goes past midnight, you might want the early morning photos to be grouped with those from the previous day.  By default the new day begins at midnight, but if you wanted any photos taken before 4AM to be grouped with the previous day you can use  
