@@ -17,6 +17,7 @@ import filecmp
 from datetime import datetime, timedelta
 import re
 import logging
+import threading
 
 logger = logging.getLogger(__name__)
 
@@ -180,6 +181,21 @@ def check_for_early_morning_photos(date, day_begins):
     return date
 
 
+def _collect_files(src_dir, recursive):
+    """Walk the source directory and return a sorted list of file paths."""
+    files = []
+    if recursive:
+        for dirpath, _, filenames in os.walk(src_dir):
+            for f in filenames:
+                files.append(os.path.join(dirpath, f))
+    else:
+        for entry in os.scandir(src_dir):
+            if entry.is_file():
+                files.append(entry.path)
+    files.sort()
+    return files
+
+
 #  this class is based on code from Sven Marnach (http://stackoverflow.com/questions/10075115/call-exiftool-from-a-python-script)
 class ExifTool(object):
     """used to run ExifTool from Python and keep it open"""
@@ -194,12 +210,21 @@ class ExifTool(object):
         self.process = subprocess.Popen(
             [self.executable, "-stay_open", "True", "-@", "-"],
             stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        self._stderr_thread = threading.Thread(target=self._drain_stderr, daemon=True)
+        self._stderr_thread.start()
         return self
+
+    def _drain_stderr(self):
+        for line in self.process.stderr:
+            msg = line.decode('utf-8', errors='replace').rstrip()
+            if msg:
+                logger.warning('ExifTool: %s', msg)
 
     def __exit__(self, exc_type, exc_value, traceback):
         self.process.stdin.write(b'-stay_open\nFalse\n')
         self.process.stdin.flush()
         self.process.wait(timeout=30)
+        self._stderr_thread.join(timeout=5)
 
     def execute(self, *args):
         args = args + ("-execute\n",)
@@ -233,7 +258,8 @@ class ExifTool(object):
 def sortPhotos(src_dir, dest_dir, sort_format, rename_format, recursive=False,
         copy_files=False, test=False, remove_duplicates=True, day_begins=0,
         additional_groups_to_ignore=None, additional_tags_to_ignore=None,
-        use_only_groups=None, use_only_tags=None, verbose=True, keep_filename=False):
+        use_only_groups=None, use_only_tags=None, verbose=True, keep_filename=False,
+        batch_size=100):
     """
     This function is a convenience wrapper around ExifTool based on common usage scenarios for sortphotos.py
 
@@ -287,171 +313,172 @@ def sortPhotos(src_dir, dest_dir, sort_format, rename_format, recursive=False,
     if not os.path.exists(dest_dir):
         raise Exception('Destination directory does not exist')
 
-    # setup arguments to exiftool
-    args = ['-j', '-a', '-G']
+    # setup base arguments to exiftool (no directory — files will be added per batch)
+    base_args = ['-j', '-a', '-G']
 
     # setup tags to ignore
     if use_only_tags is not None:
         additional_groups_to_ignore = []
         additional_tags_to_ignore = []
         for t in use_only_tags:
-            args += ['-' + t]
+            base_args += ['-' + t]
 
     elif use_only_groups is not None:
         additional_groups_to_ignore = []
         for g in use_only_groups:
-            args += ['-' + g + ':Time:All']
+            base_args += ['-' + g + ':Time:All']
 
     else:
-        args += ['-time:all']
+        base_args += ['-time:all']
 
+    # collect all file paths up front
+    all_files = _collect_files(src_dir, recursive)
+    num_files = len(all_files)
 
-    if recursive:
-        args += ['-r']
+    if num_files == 0:
+        logger.info('No files found in source directory.')
+        return
 
-    args += [src_dir]
-
-
-    # get all metadata
-    with ExifTool(verbose=verbose) as e:
-        logger.info('Preprocessing with ExifTool.  May take a while for a large number of files.')
-        metadata = e.get_metadata(*args)
-
-    # setup output to screen
-    num_files = len(metadata)
-    logger.info('')
+    logger.info('Found %d files. Processing in batches of %d.', num_files, batch_size)
 
     if test:
         test_file_dict = {}
 
-    # parse output extracting oldest relevant date
-    for idx, data in enumerate(metadata):
+    with ExifTool(verbose=verbose) as e:
 
-        # extract timestamp date for photo
-        src_file, date, keys = get_oldest_timestamp(data, additional_groups_to_ignore, additional_tags_to_ignore)
+        for batch_start in range(0, num_files, batch_size):
+            batch_files = all_files[batch_start:batch_start + batch_size]
+            batch_args = base_args + batch_files
+            metadata = e.get_metadata(*batch_args)
 
+            for i, data in enumerate(metadata):
+                idx = batch_start + i
 
-        if verbose:
-        # write out which photo we are at
-            ending = ']'
-            if test:
-                ending = '] (TEST - no files are being moved/copied)'
-            logger.info('[%d/%d%s', idx+1, num_files, ending)
-            logger.info('Source: %s', src_file)
-        else:
-            # progress bar
-            numdots = int(20.0*(idx+1)/num_files)
-            sys.stdout.write('\r')
-            sys.stdout.write('[%-20s] %d of %d ' % ('='*numdots, idx+1, num_files))
-            sys.stdout.flush()
-
-        # check if file should go to unmatched folder
-        if not date:
-            if verbose:
-                logger.info('No valid dates were found using the specified tags.  File will be placed in unmatched folder.')
-                logger.info('')
-            dest_file = os.path.join(dest_dir, 'unmatched')
-            if not test:
-                os.makedirs(dest_file, exist_ok=True)
-            filename = os.path.basename(src_file)
-            dest_file = os.path.join(dest_file, filename)
-
-        elif os.path.basename(src_file).startswith('.'):
-            if verbose:
-                logger.info('hidden file.  File will be placed in unmatched folder.')
-                logger.info('')
-            dest_file = os.path.join(dest_dir, 'unmatched')
-            if not test:
-                os.makedirs(dest_file, exist_ok=True)
-            filename = os.path.basename(src_file)
-            dest_file = os.path.join(dest_file, filename)
-
-        else:
-            if verbose:
-                logger.info('Date/Time: %s', date)
-                logger.info('Corresponding Tags: %s', ', '.join(keys))
-
-            # early morning photos can be grouped with previous day (depending on user setting)
-            date = check_for_early_morning_photos(date, day_begins)
-
-            # create folder structure
-            dir_structure = date.strftime(sort_format)
-            dirs = dir_structure.split('/')
-            dest_file = dest_dir
-            for thedir in dirs:
-                dest_file = os.path.join(dest_file, thedir)
-                if not test:
-                    os.makedirs(dest_file, exist_ok=True)
-
-            # rename file if necessary
-            filename = os.path.basename(src_file)
-
-            if rename_format is not None and date is not None:
-                _, ext = os.path.splitext(filename)
-                filename = date.strftime(rename_format) + ext.lower()
-
-            # setup destination file
-            dest_file = os.path.join(dest_file, filename)
-        root, ext = os.path.splitext(dest_file)
-
-        if verbose:
-            name = 'Destination '
-            if copy_files:
-                name += '(copy): '
-            else:
-                name += '(move): '
-            logger.info('%s%s', name, dest_file)
+                # extract timestamp date for photo
+                src_file, date, keys = get_oldest_timestamp(data, additional_groups_to_ignore, additional_tags_to_ignore)
 
 
-        # check for collisions
-        append = 1
-        fileIsIdentical = False
-
-        while True:
-
-            if (not test and os.path.isfile(dest_file)) or (test and dest_file in test_file_dict.keys()):  # check for existing name
-                if test:
-                    dest_compare = test_file_dict[dest_file]
+                if verbose:
+                # write out which photo we are at
+                    ending = ']'
+                    if test:
+                        ending = '] (TEST - no files are being moved/copied)'
+                    logger.info('[%d/%d%s', idx+1, num_files, ending)
+                    logger.info('Source: %s', src_file)
                 else:
-                    dest_compare = dest_file
-                if remove_duplicates and filecmp.cmp(src_file, dest_compare, shallow=False):  # check for identical files
-                    fileIsIdentical = True
-                    if verbose:
-                        logger.info('Identical file already exists.  Duplicate will be ignored.\n')
-                    break
+                    # progress bar
+                    numdots = int(20.0*(idx+1)/num_files)
+                    sys.stdout.write('\r')
+                    sys.stdout.write('[%-20s] %d of %d ' % ('='*numdots, idx+1, num_files))
+                    sys.stdout.flush()
 
-                else:  # name is same, but file is different
-                    if keep_filename:
-                        orig_filename = os.path.splitext(os.path.basename(src_file))[0]
-                        dest_file = root + '_' + orig_filename + '_' + str(append) + ext
+                # check if file should go to unmatched folder
+                if not date:
+                    if verbose:
+                        logger.info('No valid dates were found using the specified tags.  File will be placed in unmatched folder.')
+                        logger.info('')
+                    dest_file = os.path.join(dest_dir, 'unmatched')
+                    if not test:
+                        os.makedirs(dest_file, exist_ok=True)
+                    filename = os.path.basename(src_file)
+                    dest_file = os.path.join(dest_file, filename)
+
+                elif os.path.basename(src_file).startswith('.'):
+                    if verbose:
+                        logger.info('hidden file.  File will be placed in unmatched folder.')
+                        logger.info('')
+                    dest_file = os.path.join(dest_dir, 'unmatched')
+                    if not test:
+                        os.makedirs(dest_file, exist_ok=True)
+                    filename = os.path.basename(src_file)
+                    dest_file = os.path.join(dest_file, filename)
+
+                else:
+                    if verbose:
+                        logger.info('Date/Time: %s', date)
+                        logger.info('Corresponding Tags: %s', ', '.join(keys))
+
+                    # early morning photos can be grouped with previous day (depending on user setting)
+                    date = check_for_early_morning_photos(date, day_begins)
+
+                    # create folder structure
+                    dir_structure = date.strftime(sort_format)
+                    dirs = dir_structure.split('/')
+                    dest_file = dest_dir
+                    for thedir in dirs:
+                        dest_file = os.path.join(dest_file, thedir)
+                        if not test:
+                            os.makedirs(dest_file, exist_ok=True)
+
+                    # rename file if necessary
+                    filename = os.path.basename(src_file)
+
+                    if rename_format is not None and date is not None:
+                        _, ext = os.path.splitext(filename)
+                        filename = date.strftime(rename_format) + ext.lower()
+
+                    # setup destination file
+                    dest_file = os.path.join(dest_file, filename)
+                root, ext = os.path.splitext(dest_file)
+
+                if verbose:
+                    name = 'Destination '
+                    if copy_files:
+                        name += '(copy): '
                     else:
-                        dest_file = root + '_' + str(append) + ext
-                    append += 1
-                    if verbose:
-                        logger.info('Same name already exists...renaming to: %s', dest_file)
-
-            else:
-                break
+                        name += '(move): '
+                    logger.info('%s%s', name, dest_file)
 
 
-        # finally move or copy the file
-        if test:
-            test_file_dict[dest_file] = src_file
+                # check for collisions
+                append = 1
+                fileIsIdentical = False
 
-        else:
+                while True:
 
-            if fileIsIdentical:
-                continue  # ignore identical files
-            else:
-                if copy_files:
-                    shutil.copy2(src_file, dest_file)
+                    if (not test and os.path.isfile(dest_file)) or (test and dest_file in test_file_dict.keys()):  # check for existing name
+                        if test:
+                            dest_compare = test_file_dict[dest_file]
+                        else:
+                            dest_compare = dest_file
+                        if remove_duplicates and filecmp.cmp(src_file, dest_compare, shallow=False):  # check for identical files
+                            fileIsIdentical = True
+                            if verbose:
+                                logger.info('Identical file already exists.  Duplicate will be ignored.\n')
+                            break
+
+                        else:  # name is same, but file is different
+                            if keep_filename:
+                                orig_filename = os.path.splitext(os.path.basename(src_file))[0]
+                                dest_file = root + '_' + orig_filename + '_' + str(append) + ext
+                            else:
+                                dest_file = root + '_' + str(append) + ext
+                            append += 1
+                            if verbose:
+                                logger.info('Same name already exists...renaming to: %s', dest_file)
+
+                    else:
+                        break
+
+
+                # finally move or copy the file
+                if test:
+                    test_file_dict[dest_file] = src_file
+
                 else:
-                    shutil.move(src_file, dest_file)
+
+                    if fileIsIdentical:
+                        continue  # ignore identical files
+                    else:
+                        if copy_files:
+                            shutil.copy2(src_file, dest_file)
+                        else:
+                            shutil.move(src_file, dest_file)
 
 
 
-        if verbose:
-            logger.info('')
+                if verbose:
+                    logger.info('')
 
 
     if not verbose:
@@ -509,6 +536,9 @@ def main():
                     default=None,
                     help='specify a restricted set of tags to search for date information\n\
     e.g., EXIF:CreateDate')
+    parser.add_argument('--batch-size', type=int, default=100,
+                    help='number of files to process per ExifTool batch.\n\
+    Lower values use less memory. Default is 100.')
 
     # parse command line arguments
     args = parser.parse_args()
@@ -520,7 +550,8 @@ def main():
     sortPhotos(args.src_dir, args.dest_dir, args.sort, args.rename, args.recursive,
         args.copy, args.test, not args.keep_duplicates, args.day_begins,
         args.ignore_groups, args.ignore_tags, args.use_only_groups,
-        args.use_only_tags, not args.silent, args.keep_filename)
+        args.use_only_tags, not args.silent, args.keep_filename,
+        args.batch_size)
 
 if __name__ == '__main__':
     main()
